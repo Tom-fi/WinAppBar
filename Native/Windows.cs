@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Drawing;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -11,7 +12,7 @@ using System.Windows.Interop;
 
 namespace AppBar.Native
 {
-    public class AppBarWindow : Window
+    public partial class AppBarWindow : Window
     {
         //A bit of copy paste from here: https://www.codeproject.com/Articles/6741/AppBar-using-C
         //Had this bookmarked for quite a while (since about 2013?)
@@ -113,40 +114,6 @@ namespace AppBar.Native
 
         private bool isBarRegistered = false;
 
-        #region enums
-        enum ABMsg : int
-        {
-            NEW = 0,
-            REMOVE = 1,
-            QUERYPOS = 2,
-            SETPOS = 3,
-            GETSTATE = 4,
-            GETTASKBARPOS = 5,
-            ACTIVATE = 6,
-            GETAUTOHIDEBAR = 7,
-            SETAUTOHIDEBAR = 8,
-            WINDOWPOSCHANGED = 9,
-            SETSTATE = 10
-        }
-
-        enum ABNotify : int
-        {
-            STATECHANGE = 0,
-            POSCHANGED,
-            FULLSCREENAPP,
-            WINDOWARRANGE
-        }
-
-        enum ABEdge : int
-        {
-            LEFT = 0,
-            TOP,
-            RIGHT,
-            BOTTOM,
-            NONE
-        }
-        #endregion
-
         public AppBarWindow()
         {
             WindowStyle = WindowStyle.None;
@@ -165,6 +132,23 @@ namespace AppBar.Native
             SHAppBarMessage(ABMsg.NEW, ref abd);
 
             isBarRegistered = true;
+            InitAppBar();
+        }
+        protected override void OnClosing(CancelEventArgs e)
+        {
+            base.OnClosing(e);
+
+            if (e.Cancel)
+            {
+                return;
+            }
+
+            if (isBarRegistered)
+            {
+                var abd = InitData();
+                SHAppBarMessage(ABMsg.REMOVE, ref abd);
+                isBarRegistered = false;
+            }
         }
 
         public IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -174,37 +158,15 @@ namespace AppBar.Native
                 var abd = InitData();
                 SHAppBarMessage(ABMsg.WINDOWPOSCHANGED, ref abd);
                 //Old
-                ABSetPos();
+                //ABSetPos();
             }
+            else if(msg==(int)ABNotify.FULLSCREENAPP)
+        {
+                //::TODO:: Fullscreen app opened/closed
+                //Need to adjust topmost otherwise it will be over the fullscreen app
+        }
 
             return IntPtr.Zero;
-        }
-        [StructLayout(LayoutKind.Sequential)]
-        struct RECT
-        {
-            public int left;
-            public int top;
-            public int right;
-            public int bottom;
-
-            public RECT(int left, int top, int right, int bottom)
-            {
-                this.left = left;
-                this.top = top;
-                this.right = right;
-                this.bottom = bottom;
-            }
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        struct APPBARDATA
-        {
-            public int cbSize;
-            public IntPtr hWnd;
-            public int uCallbackMessage;
-            public int uEdge;
-            public RECT rc;
-            public IntPtr lParam;
         }
 
         private int _WindowMessageId;
@@ -230,14 +192,25 @@ namespace AppBar.Native
 
             APPBARDATA abd = InitData();
             abd.uEdge = (int)ABEdge.LEFT; //::TODO:: Read from Settings(?)
-            abd.rc = new RECT(1, 1, 1, 1); //::TODO:: Get some valid numbers
-
+            if (SHAppBarMessage(ABMsg.NEW, ref abd)==1)
+                return;
+            int size = 200; //::TODO:: This should be a variable set somewhere else. Possibly let the user resize.
+            string selectedDisplay; //::TODO:: read from settings if not set use primary if saved one is not available use primary.
+            var screens = DisplayHelper.GetDisplays();
+            var primaryScreen = screens.First(s => s.isPrimary);
+            abd.rc = new RECT(primaryScreen.MonitorArea.left, primaryScreen.MonitorArea.top, primaryScreen.MonitorArea.right, primaryScreen.MonitorArea.bottom);
             SHAppBarMessage(ABMsg.QUERYPOS, ref abd);
+            //::TODO:: next lines should be dependant on selected Edge
+            abd.rc = new RECT(abd.rc.left, abd.rc.top, abd.rc.left+size, primaryScreen.WorkArea.bottom);
             SHAppBarMessage(ABMsg.SETPOS, ref abd);
-
-            MoveWindow(abd.hWnd, abd.rc.left, abd.rc.top,
-                abd.rc.right - abd.rc.left, abd.rc.bottom - abd.rc.top, true);
+            MoveWindow(abd.hWnd, abd.rc.left, abd.rc.top, abd.rc.right - abd.rc.left, abd.rc.bottom - abd.rc.top, true);
+            RECT wtf;
+            GetWindowRect(abd.hWnd, out wtf);
+            var ttt = 1;
         }
+
+        [DllImport("user32.dll", SetLastError = true)]
+        static extern bool GetWindowRect(IntPtr hwnd, out RECT lpRect);
 
         #region DllImports
         private const string User32 = "user32.dll";
@@ -257,6 +230,8 @@ namespace AppBar.Native
 
         [DllImport(User32)]
         private static extern long SetWindowLongPtr(IntPtr hwnd, int index, long newStyle);
+        [DllImport(User32, ExactSpelling = true, CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+        private static extern bool MoveWindow(IntPtr hWnd, int x, int y, int cx, int cy, bool repaint);
         #endregion
 
         private static class Window_Style
